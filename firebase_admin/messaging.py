@@ -18,6 +18,7 @@ import concurrent.futures
 import json
 import warnings
 import requests
+import httpx
 
 from googleapiclient import http
 from googleapiclient import _auth
@@ -120,7 +121,7 @@ def send(message, dry_run=False, app=None):
     """
     return _get_messaging_service(app).send(message, dry_run)
 
-def send_each(messages, dry_run=False, app=None):
+def send_each(messages, dry_run=False, app=None, http2=False):
     """Sends each message in the given list via Firebase Cloud Messaging.
 
     If the ``dry_run`` mode is enabled, the message will not be actually delivered to the
@@ -130,6 +131,7 @@ def send_each(messages, dry_run=False, app=None):
         messages: A list of ``messaging.Message`` instances.
         dry_run: A boolean indicating whether to run the operation in dry run mode (optional).
         app: An App instance (optional).
+        http2: A boolean indicating whether to use HTTP/2 for the request (optional).
 
     Returns:
         BatchResponse: A ``messaging.BatchResponse`` instance.
@@ -138,7 +140,7 @@ def send_each(messages, dry_run=False, app=None):
         FirebaseError: If an error occurs while sending the message to the FCM service.
         ValueError: If the input arguments are invalid.
     """
-    return _get_messaging_service(app).send_each(messages, dry_run)
+    return _get_messaging_service(app).send_each(messages, dry_run, http2)
 
 def send_each_for_multicast(multicast_message, dry_run=False, app=None):
     """Sends the given mutlicast message to each token via Firebase Cloud Messaging (FCM).
@@ -396,6 +398,7 @@ class _MessagingService:
         timeout = app.options.get('httpTimeout', _http_client.DEFAULT_TIMEOUT_SECONDS)
         self._credential = app.credential.get_credential()
         self._client = _http_client.JsonHttpClient(credential=self._credential, timeout=timeout)
+        self._http2_client = httpx.Client(http2=True)
         self._build_transport = _auth.authorized_http
 
     @classmethod
@@ -419,7 +422,7 @@ class _MessagingService:
         else:
             return resp['name']
 
-    def send_each(self, messages, dry_run=False):
+    def send_each(self, messages, dry_run=False, http2=False):
         """Sends the given messages to FCM via the FCM v1 API."""
         if not isinstance(messages, list):
             raise ValueError('messages must be a list of messaging.Message instances.')
@@ -428,14 +431,24 @@ class _MessagingService:
 
         def send_data(data):
             try:
-                resp = self._client.body(
-                    'post',
-                    url=self._fcm_url,
-                    headers=self._fcm_headers,
-                    json=data)
-            except requests.exceptions.RequestException as exception:
+                if http2:
+                    resp = self._http2_client.post(
+                        self._fcm_url,
+                        headers=self._fcm_headers,
+                        json=data)
+                    if resp.status_code != 200:
+                        resp.raise_for_status()
+                else:
+                    resp = self._client.body(
+                        'post',
+                        url=self._fcm_url,
+                        headers=self._fcm_headers,
+                        json=data)
+            except (requests.exceptions.RequestException, httpx.RequestError, httpx.HTTPError, httpx.HTTPStatusError) as exception:
                 return SendResponse(resp=None, exception=self._handle_fcm_error(exception))
             else:
+                if http2:
+                    return SendResponse(resp.json(), exception=None) 
                 return SendResponse(resp, exception=None)
 
         message_data = [self._message_data(message, dry_run) for message in messages]

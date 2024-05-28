@@ -1839,6 +1839,9 @@ class TestBatch:
         fcm_service._client.session.mount(
             'https://fcm.googleapis.com',
             testutils.MockRequestBasedMultiRequestAdapter(response_dict, recorder))
+        custom_transport = testutils.MockRequestBasedMultiRequestTransport(response_dict, recorder)
+        fcm_service._http2_client._transport = custom_transport
+
         return fcm_service, recorder
 
     def _instrument_batch_messaging_service(self, app=None, status=200, payload='', exc=None):
@@ -1915,6 +1918,21 @@ class TestSendEach(TestBatch):
         assert all([r.success for r in batch_response.responses])
         assert not any([r.exception for r in batch_response.responses])
 
+    def test_send_each_http2(self):
+        payload1 = json.dumps({'name': 'message-id1'})
+        payload2 = json.dumps({'name': 'message-id2'})
+        _ = self._instrument_messaging_service(
+            response_dict={'foo1': [200, payload1], 'foo2': [200, payload2]})
+        msg1 = messaging.Message(topic='foo1')
+        msg2 = messaging.Message(topic='foo2')
+        batch_response = messaging.send_each([msg1, msg2], dry_run=True, http2=True)
+        assert batch_response.success_count == 2
+        assert batch_response.failure_count == 0
+        assert len(batch_response.responses) == 2
+        assert [r.message_id for r in batch_response.responses] == ['message-id1', 'message-id2']
+        assert all([r.success for r in batch_response.responses])
+        assert not any([r.exception for r in batch_response.responses])
+
     @pytest.mark.parametrize('status', HTTP_ERROR_CODES)
     def test_send_each_detailed_error(self, status):
         success_payload = json.dumps({'name': 'message-id'})
@@ -1929,6 +1947,34 @@ class TestSendEach(TestBatch):
         msg1 = messaging.Message(topic='foo1')
         msg2 = messaging.Message(topic='foo2')
         batch_response = messaging.send_each([msg1, msg2])
+        assert batch_response.success_count == 1
+        assert batch_response.failure_count == 1
+        assert len(batch_response.responses) == 2
+        success_response = batch_response.responses[0]
+        assert success_response.message_id == 'message-id'
+        assert success_response.success is True
+        assert success_response.exception is None
+        error_response = batch_response.responses[1]
+        assert error_response.message_id is None
+        assert error_response.success is False
+        exception = error_response.exception
+        assert isinstance(exception, exceptions.InvalidArgumentError)
+        check_exception(exception, 'test error', status)
+
+    @pytest.mark.parametrize('status', HTTP_ERROR_CODES)
+    def test_send_each_http2_detailed_error(self, status):
+        success_payload = json.dumps({'name': 'message-id'})
+        error_payload = json.dumps({
+            'error': {
+                'status': 'INVALID_ARGUMENT',
+                'message': 'test error'
+            }
+        })
+        _ = self._instrument_messaging_service(
+            response_dict={'foo1': [200, success_payload], 'foo2': [status, error_payload]})
+        msg1 = messaging.Message(topic='foo1')
+        msg2 = messaging.Message(topic='foo2')
+        batch_response = messaging.send_each([msg1, msg2], http2=True)
         assert batch_response.success_count == 1
         assert batch_response.failure_count == 1
         assert len(batch_response.responses) == 2
