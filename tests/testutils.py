@@ -22,6 +22,7 @@ from google.auth import credentials, compute_engine
 from google.auth import transport
 from requests import adapters
 from requests import models
+from httpx import BaseTransport, Response
 
 import firebase_admin
 
@@ -218,3 +219,33 @@ class MockRequestBasedMultiRequestAdapter(adapters.HTTPAdapter):
                 resp.raw = io.BytesIO(response.encode())
                 break
         return resp
+
+class MockRequestBasedMultiRequestTransport(BaseTransport):
+    """A mock HTTP transport that supports multiple responses for the httpx library.
+       The response for each incoming request should be specified in response_dict during
+       initialization. Each incoming request should contain an identifier in its body."""
+    def __init__(self, response_dict, recorder):
+        """Constructs a MockRequestBasedMultiRequestTransport.
+
+        Each incoming request consumes the response and status mapped to it. If no response
+        is specified for the request, the response will be 404 with an empty body.
+        """
+        self._response_dict = response_dict
+        self._recorder = recorder
+
+    def handle_request(self, request):
+        self._recorder.append(request)
+        response = Response(
+            status_code=404,  # Not found.
+            content=b"",
+            request=request,
+        )
+        for req_id, (status, response_text) in self._response_dict.items():
+            if req_id in request.content.decode():
+                response = Response(
+                    status_code=status,
+                    content=response_text.encode(),
+                    request=request,
+                )
+                break
+        return response
