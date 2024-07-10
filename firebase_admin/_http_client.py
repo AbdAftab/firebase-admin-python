@@ -14,13 +14,15 @@
 
 """Internal HTTP client module.
 
- This module provides utilities for making HTTP calls using the requests library.
+ This module provides utilities for making HTTP calls using the requests/httpx library.
  """
 
 from google.auth import transport
+import httpx
+from httpx import _utils as httpx_utils
 import requests
 from requests.packages.urllib3.util import retry # pylint: disable=import-error
-
+from firebase_admin._httpx_utils import HttpxAuthorizedClient, CustomRetryTransport
 
 if hasattr(retry.Retry.DEFAULT, 'allowed_methods'):
     _ANY_METHOD = {'allowed_methods': None}
@@ -33,6 +35,8 @@ DEFAULT_RETRY_CONFIG = retry.Retry(
     connect=1, read=1, status=4, status_forcelist=[500, 503],
     raise_on_status=False, backoff_factor=0.5, **_ANY_METHOD)
 
+DEFAULT_TRANSPORT_CONFIG = CustomRetryTransport(status_forcelist=[500, 503],
+                                                backoff_factor=0.5)
 
 DEFAULT_TIMEOUT_SECONDS = 120
 
@@ -46,7 +50,8 @@ class HttpClient:
 
     def __init__(
             self, credential=None, session=None, base_url='', headers=None,
-            retries=DEFAULT_RETRY_CONFIG, timeout=DEFAULT_TIMEOUT_SECONDS):
+            retries=DEFAULT_RETRY_CONFIG, timeout=DEFAULT_TIMEOUT_SECONDS,
+            http2=False, request_handler=DEFAULT_TRANSPORT_CONFIG):
         """Creates a new HttpClient instance from the provided arguments.
 
         If a credential is provided, initializes a new HTTP session authorized with it. If neither
@@ -62,19 +67,33 @@ class HttpClient:
               Pass a False value to disable retries (optional).
           timeout: HTTP timeout in seconds. Defaults to 120 seconds when not specified. Set to
               None to disable timeouts (optional).
+          http2: A boolean indicating whether to use HTTP/2 for requests (optional).
+          request_handler: A custom httpx transport to use for HTTP/2 requests. Default settings
+              would be similar to retries default (optional).
         """
         if credential:
-            self._session = transport.requests.AuthorizedSession(credential)
+            self._session = (
+                transport.requests.AuthorizedSession(credential)
+                if not http2
+                else HttpxAuthorizedClient(credential, request_handler)
+            )
         elif session:
             self._session = session
         else:
-            self._session = requests.Session() # pylint: disable=redefined-variable-type
+            self._session = (
+                requests.Session()
+                if not http2
+                else httpx.Client(http2=True, transport=request_handler)
+                ) # pylint: disable=redefined-variable-type
 
         if headers:
             self._session.headers.update(headers)
-        if retries:
+        if retries and not http2:
             self._session.mount('http://', requests.adapters.HTTPAdapter(max_retries=retries))
             self._session.mount('https://', requests.adapters.HTTPAdapter(max_retries=retries))
+        if request_handler and http2:
+            self._session._mounts = {httpx_utils.URLPattern('http://'): request_handler, # pylint: disable=protected-access
+                                     httpx_utils.URLPattern('https://'): request_handler}
         self._base_url = base_url
         self._timeout = timeout
 
