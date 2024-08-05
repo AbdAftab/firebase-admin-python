@@ -180,11 +180,11 @@ class _MutualTlsClient(httpx.Client):
         super(_MutualTlsClient, self).__init__(*args, **kwargs)
 
 class HttpxAuthorizedClient(httpx.Client):
-    """Authorized HTTP client used to make HTTP calls.
+    """An authorized HTTP client extending httpx.Client for making authenticated HTTP requests.
 
-    This class is a altered version of the `google.auth.transport.requests.AuthorizedSession`
-    class and therefore contains some identical functions. If you would like
-    to know more about the original class and/or method implementations, please visit:
+    This class is an adaptation of the `google.auth.transport.requests.AuthorizedSession`
+    concept, tailored for use with the `httpx` library. It provides similar functionality
+    but leverages httpx. The original implementation can be found here:
 
         https://github.com/googleapis/google-auth-library-python/blob/main/google/auth/transport/requests.py#L295
 
@@ -236,6 +236,10 @@ class HttpxAuthorizedClient(httpx.Client):
         """Implementation of Requests' request.
 
         Args:
+            method (str): The HTTP method to use for the request (e.g. 'GET', 'POST').
+            url (str): The URI to be requested.
+            data (Optional[Union[bytes, str]]): The payload or body in HTTP request.
+            headers (Optional[Mapping[str, str]]): Request headers.
             timeout (Optional[Union[float, Tuple[float, float]]]):
                 The amount of time in seconds to wait for the server response
                 with each individual request. Can also be passed as a tuple
@@ -253,8 +257,13 @@ class HttpxAuthorizedClient(httpx.Client):
                 itself does not timeout, e.g. if a large file is being
                 transmitted. The timout error will be raised after such
                 request completes.
+            **kwargs: Additional arguments passed through to the underlying
+                client :meth:`~httpx.Client.request` method.
+
+        Returns:
+            httpx.Response: Response object from the request
         """
-        # pylint: disable=missing-param-doc,missing-return-doc,missing-return-type-doc,arguments-differ
+        # pylint: disable=arguments-differ
         _credential_refresh_attempt = kwargs.pop("_credential_refresh_attempt", 0)
         request_headers = headers.copy() if not None else {}
 
